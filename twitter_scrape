@@ -1,0 +1,476 @@
+import tweepy
+import pandas as pd
+import time as time
+import datetime
+import argparse
+import logging
+# import json
+from textblob import TextBlob
+from pymongo import MongoClient
+# from textblob import TextBlob
+
+import rpy2.robjects as robjects
+from rpy2.robjects.packages import importr
+
+import warnings
+warnings.filterwarnings(action='ignore',message='Python 3.6 is no longer supported')
+
+
+
+def datetime_from_utc_to_local(utc_datetime):
+    now_timestamp = time.time()
+    offset = datetime.datetime.fromtimestamp(now_timestamp) - datetime.datetime.utcfromtimestamp(now_timestamp)
+    return utc_datetime + offset
+
+
+def getTweets(username, noOfTweets):
+    """
+    parameter:
+        username - username of the twitter handle
+        noOfTweets - number of tweets we want to extract
+
+    Get the tweets and save it in csv file.
+    In current Working Directory
+    """
+    auth = tweepy.OAuthHandler(consumer_key, consumer_secret)
+    auth.set_access_token(access_key, access_secret)
+    # api = tweepy.API(auth)
+    api = tweepy.API(auth, wait_on_rate_limit=True)
+    tweets = api.user_timeline(screen_name=username, count=noOfTweets)
+    if noOfTweets is None:
+        rec_id1 = {}
+        time.sleep(0.01)
+        for tweet in tweepy.Cursor(api.user_timeline, screen_name = username,tweet_mode='extended').items():
+        # for tweet in tweepy.Cursor(api.user_timeline, screen_name = username).items():        
+            ###################### Retweet Names ##########################################             
+            # # getting the retweeters
+            retweets_list = api.get_retweets(tweet.id_str)
+            if not retweets_list:
+                retweet_names = 'Null'
+                # retweet_count = 'Null'
+            else:
+                for retweet in retweets_list:
+                    retweet_names = retweet.user.screen_name
+                    if retweet_names == None:
+                        retweet_names = 'Null'
+                    else:
+                        retweet_names = retweet_names
+
+            ###################### Retweet count ################################
+            id = tweet.id_str 
+            api_status = api.get_status(id, tweet_mode = "extended")
+            retweet_count = api_status.retweet_count 
+            # print("retweet_count:",retweet_count)           
+            # print("The number of time the status has been retweeted is : " + str(retweet_count))
+              
+            ###################### fetching the user Verification ####################
+            user = api.get_user(screen_name=username)
+            if user.verified == True:
+                Handle_verified = 'verified'
+            else:
+                Handle_verified = "Not verified"
+
+            ##################### Followers_count ###########################################  
+            # fetching the followers_count
+            followers_count = user.followers_count
+
+            # ##################### Number of Tweets or Status_count ###########################################
+            # fetching the statuses_count attribute
+            statuses_count = str(user.statuses_count)
+  
+            # print("The number of statuses the user has posted are : " + str(statuses_count))
+            # print("The number of statuses the user has posted are : " + statuses_count)
+
+            ############################## Sentimant analysis ##################################
+            analysis = TextBlob(tweet.full_text)
+            # print('text: ',tweet.full_text)
+            # print(analysis.sentiment)  # print tweet's polarity
+            # print('Polarity: ', analysis.sentiment.polarity)
+            # print('subjectivity: ', analysis.sentiment.subjectivity)
+            polarity = analysis.sentiment.polarity
+            if (polarity == 0):
+                sentiment_status = 'Neutral'
+                # print('sentiment_status',sentiment_status)
+            elif (polarity > 0 and polarity <= 0.3):
+                sentiment_status = 'Weakly Positive'
+                # print('sentiment_status',sentiment_status)
+            elif (polarity > 0.3 and polarity <= 0.6):
+                sentiment_status = 'Positive'
+                # print('sentiment_status',sentiment_status)
+            elif (polarity > 0.6 and polarity <= 1):
+                sentiment_status = 'Strongly Positive'
+                # print('sentiment_status',sentiment_status)
+            elif (polarity > -0.3 and polarity <= 0):
+                sentiment_status = 'Weakly Negative'
+                # print('sentiment_status',sentiment_status)
+            elif (polarity > -0.6 and polarity <= -0.3):
+                sentiment_status = 'Negative'
+                # print('sentiment_status',sentiment_status)
+            elif (polarity > -1 and polarity <= -0.6):
+                sentiment_status = 'Strongly Negative'
+                # print('sentiment_status',sentiment_status)
+
+            ################### load the sentimentr package ###################
+            sa = importr("SentimentAnalysis")
+            sentimentr = importr("sentimentr")
+            syuzhet = importr("syuzhet")
+            
+            result=syuzhet.get_sentiment(str(tweet.full_text.encode("utf-8")))
+
+            if (result[0] <=-0.25):
+                likert_status = 'Will not recommend'
+                likert_scale = 1
+            elif (result[0] >-0.25 and result[0] <=-0.1):
+                likert_status = 'May not recommend'
+                likert_scale = 2
+            elif (result[0] >-0.1 and result[0] <=0.25):
+                likert_status = 'Neutral'
+                likert_scale = 3
+            elif (result[0] >0.25 and result[0] <=0.75):
+                likert_status = 'May recommend'
+                likert_scale = 4
+            elif (result[0] >0.75):
+                likert_status = 'Will recommend'
+                likert_scale = 5
+
+
+            ######################## Handle_URL_link #######################
+            Handle_URL_link = f"https://twitter.com/{username}"
+            # print("Handle_URL_link",Handle_URL_link)
+
+            ######################## Post_URL_link #######################
+            Post_URL_link = f"https://twitter.com/{username}/status/{tweet.id_str}"
+            # print("Post_URL_link",Post_URL_link)
+
+            ################## fetching the user likes count ###############
+            # fetching the favourites_count attribute
+            tweet_status = api.get_status(id)
+            favourites_count = tweet_status.favorite_count
+            # print("The number of tweets the user has liked are : " + str(favourites_count))
+
+            ############################# Fetching Published_Date ######################
+            # fetching the created_at attribute
+            created_date = datetime_from_utc_to_local(tweet.created_at)
+              
+            # print("The status was created at : " + str(created_date))
+
+            ########################## scraped Datetime ##################
+            # using now() to get current time
+            current_time = datetime.datetime.now()
+
+            ########################## Fetching the Hashtags ########################
+
+            hashtags = tweet.entities['hashtags']
+            # print("hashtags:",hashtags)
+
+            # ############################## Fetching the location ###############################
+            location = user.location
+            # print("The location of the user is : ", user.location)
+
+            # print("number_of_tweets: if condir end")
+            ##################### save into mongofb ####################################
+            rec1 = {'Post_ID': tweet.id_str,
+                    'Handle/Name':username,
+                    'Handle_verified':Handle_verified,
+                    'Handle_URL':Handle_URL_link,
+                    'Post_URL':Post_URL_link,
+                    'Digital_Content':str(tweet.full_text.encode("utf-8")),
+                    'Retweeted_by':retweet_names,
+                    'Content_Language':'EN',
+                    'Translated':'NO',
+                    'Platform':'Twitter',
+                    'GDPR':'Yes',
+                    'Hashtags':hashtags,
+                    'Mentions':('@'+username),
+                    'Number_of_Tweets_Count':statuses_count,
+                    'Retweet_count':retweet_count,
+                    'Likes_Count':str(favourites_count),
+                    'Comments_count':'Comments_count',
+                    'Published_Date':created_date,
+                    'Promotion_type':'Hashtag_Search',
+                    'Product_category':'Crypto',
+                    'Scrape_Initiator':'',
+                    'Scraped_Date':current_time,
+                    'Location':location,
+                    'Polarity':analysis.sentiment.polarity,
+                    'Subjectivity':analysis.sentiment.subjectivity,
+                    'sentiment_status':sentiment_status,
+                    'syuzhet_sentiment':result[0],
+                    'Recommendation_Conversion':likert_status,
+                    'likert_scale':likert_scale  
+                    }
+            rec_id1 = twitter_collection.insert_one(rec1)
+        # print("Twitter data saved into MongoDB")
+
+    else:
+        rec_id1 = {}
+        time.sleep(0.01)        
+        # print("else_noOfTweets:", noOfTweets)
+        # print("number_of_tweets: else condir")
+        for tweet in tweepy.Cursor(api.user_timeline, screen_name = username,tweet_mode='extended').items(noOfTweets):      
+            ###################### Retweet Names ##########################################             
+            # # getting the retweeters
+            retweets_list = api.get_retweets(tweet.id_str)
+            if not retweets_list:
+                retweet_names = 'Null'
+                # retweet_count = 'Null'
+                # print("retweet_count:",retweet_count)
+            else:
+                for retweet in retweets_list:
+                    retweet_names = retweet.user.screen_name
+                    if retweet_names == None:
+                        retweet_names = 'Null'
+                    else:
+                        retweet_names = retweet_names
+                        retweet_names = '@'+retweet_names
+                # print("retweet_names:",retweet_names)
+                # print("retweet_names",'@'+retweet_names)
+
+
+            ###################### Retweet count ################################
+            id = tweet.id_str 
+            api_status = api.get_status(id, tweet_mode = "extended")
+            retweet_count = api_status.retweet_count 
+            # print("retweet_count:",retweet_count)           
+            # print("The number of time the status has been retweeted is : " + str(retweet_count))
+              
+            ###################### fetching the user Verification ####################
+            user = api.get_user(screen_name=username)
+            if user.verified == True:
+                Handle_verified = 'verified'
+            else:
+                Handle_verified = "Not verified"
+
+            ##################### Followers_count ###########################################  
+            # fetching the followers_count
+            followers_count = user.followers_count
+
+            # ##################### Number of Tweets or Status_count ###########################################
+            # fetching the statuses_count attribute
+            statuses_count = str(user.statuses_count)
+  
+            # print("The number of statuses the user has posted are : " + str(statuses_count))
+            # print("The number of statuses the user has posted are : " + statuses_count)
+
+            ############################## Sentimant analysis ##################################
+            analysis = TextBlob(tweet.full_text)
+            # print('text: ',tweet.full_text)
+            # print(analysis.sentiment)  # print tweet's polarity
+            # print('Polarity: ', analysis.sentiment.polarity)
+            # print('subjectivity: ', analysis.sentiment.subjectivity)
+            polarity = analysis.sentiment.polarity
+            if (polarity == 0):
+                sentiment_status = 'Neutral'
+                # print('sentiment_status',sentiment_status)
+            elif (polarity > 0 and polarity <= 0.3):
+                sentiment_status = 'Weakly Positive'
+                # print('sentiment_status',sentiment_status)
+            elif (polarity > 0.3 and polarity <= 0.6):
+                sentiment_status = 'Positive'
+                # print('sentiment_status',sentiment_status)
+            elif (polarity > 0.6 and polarity <= 1):
+                sentiment_status = 'Strongly Positive'
+                # print('sentiment_status',sentiment_status)
+            elif (polarity > -0.3 and polarity <= 0):
+                sentiment_status = 'Weakly Negative'
+                # print('sentiment_status',sentiment_status)
+            elif (polarity > -0.6 and polarity <= -0.3):
+                sentiment_status = 'Negative'
+                # print('sentiment_status',sentiment_status)
+            elif (polarity > -1 and polarity <= -0.6):
+                sentiment_status = 'Strongly Negative'
+                # print('sentiment_status',sentiment_status)
+
+            ################### load the sentimentr package ###################
+            sa = importr("SentimentAnalysis")
+            sentimentr = importr("sentimentr")
+            syuzhet = importr("syuzhet")
+            
+            result=syuzhet.get_sentiment(str(tweet.full_text.encode("utf-8")))
+
+            if (result[0] <=-0.25):
+                likert_status = 'Will not recommend'
+                likert_scale = 1
+            elif (result[0] >-0.25 and result[0] <=-0.1):
+                likert_status = 'May not recommend'
+                likert_scale = 2
+            elif (result[0] >-0.1 and result[0] <=0.25):
+                likert_status = 'Neutral'
+                likert_scale = 3
+            elif (result[0] >0.25 and result[0] <=0.75):
+                likert_status = 'May recommend'
+                likert_scale = 4
+            elif (result[0] >0.75):
+                likert_status = 'Will recommend'
+                likert_scale = 5
+
+
+            ######################## Handle_URL_link #######################
+            Handle_URL_link = f"https://twitter.com/{username}"
+            # print("Handle_URL_link",Handle_URL_link)
+
+            ######################## Post_URL_link #######################
+            Post_URL_link = f"https://twitter.com/{username}/status/{tweet.id_str}"
+            # print("Post_URL_link",Post_URL_link)
+
+            ################## fetching the user likes count ###############
+            # fetching the favourites_count attribute
+            tweet_status = api.get_status(id)
+            favourites_count = tweet_status.favorite_count
+            # print("The number of tweets the user has liked are : " + str(favourites_count))
+
+            ############################# Fetching Published_Date ######################
+            # fetching the created_at attribute
+            created_date = datetime_from_utc_to_local(tweet.created_at)
+              
+            # print("The status was created at : " + str(created_date))
+
+            ########################## scraped Datetime ##################
+            # using now() to get current time
+            current_time = datetime.datetime.now()
+
+            ########################## Fetching the Hashtags ########################
+
+            hashtags = tweet.entities['hashtags']
+            # print("hashtags:",hashtags)
+
+            # ############################## Fetching the location ###############################
+            location = user.location
+            # print("The location of the user is : ", user.location)
+
+            ##################### save into mongofb ####################################
+            rec1 = {'Post_ID': tweet.id_str,
+                    'Handle/Name':username,
+                    'Handle_verified':Handle_verified,
+                    'Handle_URL':Handle_URL_link,
+                    'Post_URL':Post_URL_link,
+                    'Digital_Content':str(tweet.full_text.encode("utf-8")),
+                    'Retweeted_by':retweet_names,
+                    'Content_Language':'EN',
+                    'Translated':'NO',
+                    'Platform':'Twitter',
+                    'GDPR':'Yes',
+                    'Hashtags':hashtags,
+                    'Mentions':('@'+username),
+                    'Number_of_Tweets_Count':statuses_count,
+                    'Retweet_count':retweet_count,
+                    'Likes_Count':str(favourites_count),
+                    'Comments_count':'Comments_count',
+                    'Published_Date':created_date,
+                    'Promotion_type':'Hashtag_Search',
+                    'Product_category':'Crypto',
+                    'Scrape_Initiator':'Sriramganesh.M',
+                    'Scraped_Date':current_time,
+                    'Location':location,
+                    'Polarity':analysis.sentiment.polarity,
+                    'Subjectivity':analysis.sentiment.subjectivity,
+                    'sentiment_status':sentiment_status,
+                    'syuzhet_sentiment':result[0],
+                    'Recommendation_Conversion':likert_status,
+                    'likert_scale':likert_scale  
+                    }
+            rec_id1 = twitter_collection.insert_one(rec1)
+        # # print("Twitter data saved into MongoDB")            
+
+
+if __name__ == '__main__':
+    """
+    Get the username and number of tweets to extract from the command line
+    """
+    try:
+        # using now() to get current time
+        Start_time = datetime.datetime.now()
+        succss = True
+
+        # Get the username and number of tweets from command line
+        parser = argparse.ArgumentParser(description='Pass the username and the number of tweets')
+        parser.add_argument('--keyword', nargs='?')
+        parser.add_argument('--number_of_tweets', type=int)
+        parser.add_argument('--db_name', help='Database name')#added
+        parser.add_argument('--coll_name', help='Collection name')#added
+
+        #connect to database
+        try:
+            #client = MongoClient("localhost", 27017)
+            client = MongoClient("gggg")
+            print("Connected successfully!!!")
+        except:
+            print("Could not connect to MongoDB")
+
+
+        args = parser.parse_args()
+        db_name = args.db_name
+        collection = args.coll_name
+        # print("db_name",db_name)
+        # print("collection",collection)
+        db = client[db_name]
+        # print("Database list: ",client.list_database_names())
+        # twitter_collection = db["a"]
+        twitter_collection = db[collection]
+        # print("collection list:",db.list_collection_names())
+  
+
+        #consumer_key = "8hGoSZ1qFew1XsdMnaAgNRZ9f"
+        #consumer_secret = "HQK5BfW8OMDBEqEKMjRxzaLCcVF8BgPjNiG5eT0bXDiS1JC3Ro"
+        #access_key = "2853255397-CUdDZnKtigKDF8BD26cdc9ncNNyBKJePYu7jfFz"
+        #access_secret = "ue3esWfccJ6MWAPJIRUjCd4hnYMArQd6uP5xTT7GocvtA"
+
+        #################### New Developer account credentials #############################
+        consumer_key = "xxxxxxxxxxx"
+        consumer_secret = "xxxxxxxxxx"
+        access_key = "xxxxxxxxxxxxx"
+        access_secret = "xxxxxxxxxxx"        
+
+
+        # creating/opening a file
+        f = open("Tweets_Log.txt", "a")
+        # writing in the file
+        f.write(str(Start_time))
+        f.write('\n')
+
+        # args = parser.parse_args()
+        userName = args.keyword
+        noOfTweets = args.number_of_tweets
+        print(userName)
+        print(noOfTweets)
+        print("Running crontab_tweetExtractor")
+        # userName = 'FordMustang'
+        # noOfTweets = 10        
+
+        getTweets(userName, noOfTweets)
+
+        # using now() to get current time
+        End_time = datetime.datetime.now()
+        # writing in the file
+        f.write(str(End_time))
+        f.write('\n')
+        # closing the file
+        f.close()
+
+
+    except Exception as ex:
+        Start_time = datetime.datetime.now()
+        # creating/opening a file
+        f = open("Tweets_Log.txt", "a")
+        # writing in the file
+        f.write(str(Start_time))
+        f.write('\n')
+
+        print("An error occurred: " + str(ex))
+
+        End_time = datetime.datetime.now()
+        # writing in the file
+        f.write(str(ex))
+        f.write(str(End_time))
+        f.write('\n')
+        # closing the file
+        f.close()
+        succss = False
+        print("End_time:",End_time)
+    finally:
+        print('trigger time: {}'.format(Start_time),end=',')
+        print('completed time: {}'.format(datetime.datetime.now()),end=',')
+        if succss == True:
+            print('Status: {}'.format('Success'),end='\n')
+        else:
+            print('Status: {}'.format('Failed'),end='\n')
