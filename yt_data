@@ -1,0 +1,163 @@
+import os
+import io
+import csv
+#import yapi
+import argparse
+import json
+from scraper.description_downloader import scrape_video_data
+from scraper.comments_downloader import comments_extractor
+import multiprocessing
+from joblib import Parallel, delayed
+from tqdm import tqdm
+from googletrans import Translator
+import datetime
+from textblob import TextBlob
+from pymongo import MongoClient
+import rpy2.robjects as robjects
+from rpy2.robjects.packages import importr
+
+num_cores = multiprocessing.cpu_count()
+# num_cores = 30
+#print('Total number of cores: {}'.format(num_cores))
+
+
+def extract_data(ids,db_name,coll_name):
+    conn = MongoClient("xxxxxxxx")
+    db = conn[db_name]
+    # An instance of the Translator is created
+    translator = Translator()
+    # Get video description
+    description_response = scrape_video_data(ids)
+
+    # Get video comments
+    comment_response = comments_extractor(ids)
+
+    response = {
+        'video_description': description_response,
+        'comment_response': comment_response
+    }
+
+           
+    video_id = ids
+    title = description_response['title']
+    views = description_response['statistics']['views']
+    likes = description_response['statistics']['likes']
+    upload_date = description_response['upload_date']
+    channel_id = description_response['uploader']['channel_id']
+    description = description_response['description']
+    comment = comment_response
+    all_comments = []
+    for x in comment:
+        all_comments.append(x['text'])
+
+    for comm in comment_response:
+        comm_id=comm['cid']
+        comment=comm['text']
+        published_time=comm['time']
+        user_name=comm['author']
+        channel_id=comm['channel']
+        votes=comm['votes']
+        blob=TextBlob(comment)
+        polar = blob.sentiment.polarity
+        subject=blob.sentiment.subjectivity
+	
+	# load the sentimentr package
+        sa = importr("SentimentAnalysis")
+        sentimentr = importr("sentimentr")
+        syuzhet = importr("syuzhet")
+	
+        result=syuzhet.get_sentiment(comment)
+        
+        comm_lang = translator.detect(comment).lang
+        if comm_lang == 'en':
+            trans_comments=comment
+            translated = 'No'
+        else :
+            trans_comments = translator.translate(comment).text
+            translated = 'Yes'
+        
+        translated_time = translator.translate(published_time)
+        pub_time = translated_time.text
+
+        if (polar == 0):
+            sentiment_status = 'Neutral'
+            # print('sentiment_status',sentiment_status)
+        elif (polar > 0 and polar <= 0.3):
+            sentiment_status = 'Weakly Positive'
+            # print('sentiment_status',sentiment_status)
+        elif (polar > 0.3 and polar <= 0.6):
+            sentiment_status = 'Positive'
+            # print('sentiment_status',sentiment_status)
+        elif (polar > 0.6 and polar <= 1):
+            sentiment_status = 'Strongly Positive'
+            # print('sentiment_status',sentiment_status)
+        elif (polar > -0.3 and polar <= 0):
+            sentiment_status = 'Weakly Negative'
+            # print('sentiment_status',sentiment_status)
+        elif (polar > -0.6 and polar <= -0.3):
+            sentiment_status = 'Negative'
+            # print('sentiment_status',sentiment_status)
+        elif (polar > -1 and polar <= -0.6):
+            sentiment_status = 'Strongly Negative'
+            # print('sentiment_status',sentiment_status)
+
+        if (result[0] <=-0.25):
+            likert_status = 'Will not recommend'
+            likert_scale = 1
+        elif (result[0] >-0.25 and result[0] <=-0.1):
+            likert_status = 'May not recommend'
+            likert_scale = 2
+        elif (result[0] >-0.1 and result[0] <=0.25):
+            likert_status = 'Neutral'
+            likert_scale = 3
+        elif (result[0] >0.25 and result[0] <=0.75):
+            likert_status = 'May recommend'
+            likert_scale = 4
+        elif (result[0] >0.75):
+            likert_status = 'Will recommend'
+            likert_scale = 5
+    
+        rec1 = {'CommentID':comm_id,
+                'VideoID':video_id,
+                'Raw_Comment':comment,
+                'Translated_comment':trans_comments,
+                'Time':pub_time,
+                'Username':user_name,
+                'ChannelID':channel_id,
+                'Votes':votes,
+                'Content_Language':comm_lang,
+                'Translated':translated,
+                'Platform':'Youtube',
+                'GDPR':'Yes',
+                'Subjectivity':subject,
+                'Polarity':polar,
+                'Scrape_Initiator':"",
+                'Scraped_Date':datetime.datetime.now(),
+                'Location_country':"India",
+                'sentiment_status':sentiment_status,
+		'syuzhet_sentiment':result[0],
+		'Recommendation_Conversion':likert_status,
+		'likert_scale':likert_scale
+        }
+        comm_name = coll_name + "_comments"#added
+        collection = db[comm_name]
+        rec_id1 = collection.insert_one(rec1)
+    
+
+    rec = {'VideoID':video_id,
+           'Title':title,
+           'View':views,
+           'Likes':likes,
+           'UploadDate':upload_date,
+           'ChannelID':channel_id,
+           'Description':description,
+           'Comments':all_comments,
+           'Comments_count':len(all_comments),
+           'Content_Language':'EN',
+           'Translated':'No',
+           'Platform':'Youtube',
+           'GDPR':'Yes',
+           'Scraped_Date':datetime.datetime.now(),
+        }
+    collection1 = db[coll_name]
+    rec_id = collection1.insert_one(rec)
