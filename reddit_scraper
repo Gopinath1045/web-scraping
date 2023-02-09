@@ -1,0 +1,168 @@
+import logging
+import time
+import datetime
+from datetime import date
+from datetime import datetime
+import argparse
+from pymongo import MongoClient
+import praw
+import collections
+import csv
+from pathlib import Path
+from yaml import load, Loader
+from bson import json_util
+from pymongo import MongoClient
+from textblob import TextBlob
+import praw
+import pandas as pd
+import rpy2.robjects as robjects
+from rpy2.robjects.packages import importr
+syuzhet = importr("syuzhet")
+
+logger = logging.getLogger()
+start_time = time.time()
+
+# TODO Add config file validation.
+def validate_config(config, args):
+    return True
+
+def read_config(config_file):
+    try:
+        with open(config_file, "r") as f:
+            config = load(f, Loader=Loader)
+    except Exception as e:
+        logger.error(e)
+    return config
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--file', type=argparse.FileType('r'), help='Text file to be used as input')
+parser.add_argument('--time', help='Time for which data to be extracted')
+parser.add_argument('--db_name', help='Database name')
+parser.add_argument('--coll_name', help='Collection name')
+args = vars(parser.parse_args())
+
+MyText = args['file']
+time_frame = args['time']
+db_name = args['db_name']
+coll_name = args['coll_name']
+
+
+try:
+    start_time = datetime.now()
+    success = True
+
+
+
+#connect to database
+    conn = MongoClient("vvv")
+  #define the database to use 
+
+    db = db = conn[db_name]
+#Define the reddit collection to use(this will collects the post based comments info)
+    collection = db[coll_name]
+#connecting to user
+
+    reddit = praw.Reddit(client_id='xxxxxx', 
+                     client_secret='xxxxxxxxxxxx',
+                     user_agent='xxxxxxxxxx',
+                     password="xxxxxxxx",
+                     username="xxxxxxxxxxxxxxxxxx")
+    with MyText as f:
+        lines = f.readlines()
+        # Loop through the list of URLs
+        for url in lines:
+         # Remove leading and trailing whitespace from the URL
+            url = url.strip()
+            #print(url)
+            submission= reddit.submission(url=url)
+            submission.comments.replace_more(limit=0)
+            for comment in submission.comments.list():
+                myquery = { "ID": comment.id }
+                doc= collection.find_one(myquery)
+                if doc == None:
+                    pass
+                else:
+                    continue
+                data={
+                    "ID":comment.id,
+                    "parent_id":comment.parent_id,
+                    "Score":comment.score,
+                    "Body":comment.body,
+                    "likes":comment.likes,
+                    "created":str(datetime.fromtimestamp(comment.created)),
+                    "controversiality":comment.controversiality,
+                    "total_awards_received":comment.total_awards_received,
+                    "author_is_blocked":comment.author_is_blocked,
+                    "link_id":comment.link_id,
+                    "author_flair_template_id":comment.author_flair_template_id,
+                    "gilded":comment.gilded,
+                    "edited":comment.edited,
+                    "is_submitter":comment.is_submitter,
+                    "gildings":comment.gildings,
+                    "score_hidden":comment.score_hidden,
+                    "depth":comment.depth,
+                    "Upvote":comment.ups,
+                    "Downvote":comment.downs,
+                    "Scrape_Initiator":"Gopinath",
+                    "Scrape_datetime":datetime.now(),
+                    "Platform":"Reddit",
+                    "Product_category":"Crypto",
+                    "location_country":"INDIA",
+                    "Content_Language":"EN",
+                    "GDPR":"Yes",
+                    "Promotion_type":"URL_Search",
+                    "polarity":TextBlob(comment.body).sentiment.polarity,
+                    "subject":TextBlob(comment.body).sentiment.subjectivity,
+                    "sentiment_status":"",
+                    "syuzhet_sentiment":syuzhet.get_sentiment(comment.body)[0],
+                    "Recommendation_Conversion":" ",
+                    "likert_scale":" "
+                }
+                polarity = data["polarity"]
+                if (polarity==0):
+                    data["sentiment_status"] = 'Neutral'
+                elif (polarity > 0 and polarity <= 0.3):
+                    data["sentiment_status"] = 'Weakly Positive'
+                elif (polarity > 0.3 and polarity <= 0.6):
+                    data["sentiment_status"] = 'Positive'
+                elif (polarity > 0.6 and polarity <= 1):
+                    data["sentiment_status"] = 'Strongly Positive' 
+                elif (polarity > -0.3 and polarity <= 0):
+                    data["sentiment_status"] = 'Weakly Negative'
+                elif (polarity > -0.6 and polarity <= -0.3):
+                     data["sentiment_status"] = 'Negative'
+                elif (polarity > -1 and polarity <= -0.6):
+                     data["sentiment_status"] = 'Strongly Negative'
+
+                sentiment=data["syuzhet_sentiment"]
+                if (sentiment > -0.1 and sentiment <= 0.25):
+                    data["Recommendation_Conversion"] = 'Neutral'
+                    data["likert_scale"]=3
+                elif (sentiment > -0.25 and sentiment <= -0.1):
+                    data["Recommendation_Conversion"] = 'May not recommend'
+                    data["likert_scale"]=2
+                elif (sentiment <= -0.25):
+                    data["Recommendation_Conversion"] = 'Will not recommend'
+                    data["likert_scale"]=1
+                elif (sentiment > 0.25 and sentiment <= 0.65):
+                    data["Recommendation_Conversion"] = 'May recommend'
+                    data["likert_scale"]=4
+                elif (sentiment > 0.65):
+                    data["Recommendation_Conversion"] = 'Will recommend'
+                    data["likert_scale"]=5
+
+                try:
+                    rec1=collection.insert_one(data)
+                except Exception as ex:
+                    print('error : {}'.format(e),end=',')
+
+except Exception as e:
+    print('error : {}'.format(e),end=',')
+    success = False
+finally:
+    print('trigger time: {}'.format(start_time),end=',')
+    print('Completed time: {}'.format(datetime.now()),end=',')
+    if success == True:
+        print('Status: {}'.format('Success'),end='\n')
+    else:
+        print('Status: {}'.format('Failed'),end='\n')
